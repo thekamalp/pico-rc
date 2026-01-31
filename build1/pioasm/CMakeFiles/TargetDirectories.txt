@@ -1,6 +1,0 @@
-C:/Users/theka/source/repos/pico-rc/build1/pioasm/CMakeFiles/pioasm.dir
-C:/Users/theka/source/repos/pico-rc/build1/pioasm/CMakeFiles/edit_cache.dir
-C:/Users/theka/source/repos/pico-rc/build1/pioasm/CMakeFiles/rebuild_cache.dir
-C:/Users/theka/source/repos/pico-rc/build1/pioasm/CMakeFiles/list_install_components.dir
-C:/Users/theka/source/repos/pico-rc/build1/pioasm/CMakeFiles/install.dir
-C:/Users/theka/source/repos/pico-rc/build1/pioasm/CMakeFiles/install/local.dir
