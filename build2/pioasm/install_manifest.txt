@@ -1,5 +1,0 @@
-C:/Users/theka/source/repos/pico-rc/build2/pioasm-install/pioasm/pioasm.exe
-C:/Users/theka/source/repos/pico-rc/build2/pioasm-install/pioasm/pioasmTargets.cmake
-C:/Users/theka/source/repos/pico-rc/build2/pioasm-install/pioasm/pioasmTargets-debug.cmake
-C:/Users/theka/source/repos/pico-rc/build2/pioasm-install/pioasm/pioasmConfig.cmake
-C:/Users/theka/source/repos/pico-rc/build2/pioasm-install/pioasm/pioasmConfigVersion.cmake
