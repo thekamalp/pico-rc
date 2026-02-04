@@ -119,6 +119,18 @@ int main()
     const uint blink_slow_delay = 500;
     const uint blink_med_delay = 250;
     const uint blink_fast_delay = 50;
+
+#ifdef MOTOR_RAMP
+    const uint motor_ramp_ms = 2000;  // Time in ms to ramp the motor to full throttle
+    const uint motor_full_throttle = 256;
+    const uint motor_ramp_iterations = (motor_ramp_ms + sleep_delay - 1) / sleep_delay;
+    const uint motor_inc_per_iter = motor_full_throttle / motor_ramp_iterations;
+    const uint motor_inc_remainder = motor_full_throttle - (motor_inc_per_iter * motor_ramp_iterations);
+    const uint motor_remainder_inc1 = (motor_inc_remainder == 0) ? 0 : (motor_ramp_iterations / motor_inc_remainder);
+    const uint motor_inc_remainder2 = (motor_remainder_inc1 == 0) ? 0 : (motor_inc_remainder - motor_ramp_iterations / motor_remainder_inc1);
+    const uint motor_remainder_inc2 = (motor_inc_remainder2 == 0) ? 0 : (motor_ramp_iterations / motor_inc_remainder2);
+#endif
+
     uint cur_blink_state = 0;
     uint cur_blink_iteration = 0;
     uint blink_iterations = blink_slow_delay / sleep_delay;
@@ -126,7 +138,13 @@ int main()
     gear_state_t gear_state = GEAR_F1;
 
     hid_state_t gpad_state;
-    uint max_power_count = 0;
+    uint max_servo_power_count = 0;
+#ifdef MOTOR_RAMP
+    uint motor_count1 = 0;
+    uint motor_count2 = 0;
+    uint cur_motor_speed = 0;
+    uint motor_inc;
+#endif
 
     while (true) {
         // Read and process user input
@@ -198,7 +216,7 @@ int main()
                 servo_power = 0;
             }
             // set the direction correctly, and power on servo
-            if (steer_amount_from_center < STEER_CENTER_TOLERANCE && max_power_count >= 10) {
+            if (steer_amount_from_center < STEER_CENTER_TOLERANCE && max_servo_power_count >= 10) {
                 // center steering
                 pwm_set_both_levels(DRIVE_SERVO_PWM_SLICE, 0, 0);
             } else if (cur_steer < steer_amount || steer_amount_from_right < STEER_SIDE_TOLERANCE) {
@@ -207,9 +225,9 @@ int main()
                 pwm_set_both_levels(DRIVE_SERVO_PWM_SLICE, 0, 256);
             }
             if (servo_power >= SERVO_MAX_POWER) {
-                max_power_count++;
+                max_servo_power_count++;
             } else {
-                max_power_count = 0;
+                max_servo_power_count = 0;
             }
             pwm_set_chan_level(DRIVE_SERVO_POWER_PWM_SLICE, PWM_CHAN_A, servo_power);
         } else {
@@ -231,12 +249,41 @@ int main()
         bool brake = (gpad_state.l2 >= DEADZONE);
         uint32_t motor_speed = ((brake) ? gpad_state.l2 : gpad_state.r2) + 1;
         motor_speed = (motor_speed < DEADZONE) ? 0 : motor_speed;
+#ifdef MOTOR_RAMP
+        motor_inc = motor_inc_per_iter;
+        if (motor_remainder_inc1) {
+            if (motor_count1 == 0) motor_inc++;
+            motor_count1++;
+            if (motor_count1 >= motor_remainder_inc1) motor_count1 = 0;
+        }
+        if (motor_remainder_inc2) {
+            if (motor_count2 == 0) motor_inc++;
+            motor_count2++;
+            if (motor_count2 >= motor_inc_remainder2) motor_count2 = 0;
+        }
+        if (motor_speed > cur_motor_speed) {
+            if (cur_motor_speed + motor_inc > motor_speed) {
+                cur_motor_speed = motor_speed;
+            } else {
+                cur_motor_speed += motor_inc;
+            }
+        } else {
+            if (cur_motor_speed < motor_speed + motor_inc) {
+                cur_motor_speed = motor_speed;
+            } else {
+                cur_motor_speed -= motor_inc;
+            }
+        }
+#else
+        uint32_t cur_motor_speed = motor_speed;
+#endif
         if (brake) {
+            cur_motor_speed = 0;
             pwm_set_both_levels(DRIVE_MOTOR_PWM_SLICE, motor_speed, motor_speed);
         } else if (gear_state == GEAR_R1) {
-            pwm_set_both_levels(DRIVE_MOTOR_PWM_SLICE, 0, motor_speed);
+            pwm_set_both_levels(DRIVE_MOTOR_PWM_SLICE, 0, cur_motor_speed);
         } else {
-            pwm_set_both_levels(DRIVE_MOTOR_PWM_SLICE, motor_speed, 0);
+            pwm_set_both_levels(DRIVE_MOTOR_PWM_SLICE, cur_motor_speed, 0);
         }
 
         uint front_light_intensity = (front_light_state != LIGHT_OFF) ?
