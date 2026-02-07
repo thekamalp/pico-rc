@@ -99,9 +99,28 @@ int main()
     sleep_ms(SERVO_CHECK_DELAY_MS);
     uint servo_left_pos = adc_read();
 
+    // Add a check to see if the input pin is disconnected
+    // enable the pull up resistor, and read the value, and store it
+    gpio_pull_up(ADC_PIN);
+    // wait to make sure pull up resistor has been enabled
+    sleep_ms(10);
+    // ADC value may have changed due to enabling the pull up resistor
+    uint pull_up_adc1 = adc_read();
+
     // move to right, wait and read position
     pwm_set_both_levels(DRIVE_SERVO_PWM_SLICE, 256, 0);
     sleep_ms(SERVO_CHECK_DELAY_MS);
+
+    // Check if the value changed by a significant margin
+    uint pull_up_adc2 = adc_read();
+    uint pull_up_delta = (pull_up_adc1 > pull_up_adc2) ? pull_up_adc1 - pull_up_adc2 : pull_up_adc2 - pull_up_adc1;
+    const uint SERVO_FEEDBACK_EXISTS_TOLERANCE = 500;
+    use_servo_feedback = (pull_up_delta >= SERVO_FEEDBACK_EXISTS_TOLERANCE);
+    // disable pull up resistor
+    gpio_disable_pulls(ADC_PIN);
+    // wait to make sure resistor has been disabled
+    sleep_ms(10);
+
     uint servo_right_pos = adc_read();
 
     // move back to center, wait and power down
@@ -110,7 +129,9 @@ int main()
 
     if ((servo_center_pos == servo_left_pos) || (servo_center_pos == servo_right_pos) || (servo_left_pos == servo_right_pos)) {
         use_servo_feedback = false;
-    } else {
+    }
+    
+    if (use_servo_feedback) {
         // if we're using feedback, power down the servo
         pwm_set_chan_level(DRIVE_SERVO_POWER_PWM_SLICE, PWM_CHAN_A, 0);
     }
