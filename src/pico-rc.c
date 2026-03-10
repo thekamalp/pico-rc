@@ -225,8 +225,8 @@ int main()
                 steer_amount >>= 12;
             }
             uint steer_diff = (steer_amount < cur_steer) ? cur_steer - steer_amount : steer_amount - cur_steer;
-            const uint SERVO_MIN_POWER = 72;
-            const uint SERVO_MAX_POWER = 144;
+            const uint SERVO_MIN_POWER = 192;
+            const uint SERVO_MAX_POWER = 256;
             uint servo_power = (((SERVO_MAX_POWER - SERVO_MIN_POWER) * steer_diff) >> 12) + SERVO_MIN_POWER;
             if (steer_amount_from_center < STEER_CENTER_TOLERANCE ||
                 steer_amount_from_left < STEER_SIDE_TOLERANCE ||
