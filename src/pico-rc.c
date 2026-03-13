@@ -27,6 +27,7 @@ int main()
     const uint DRIVE_MOTOR_PIN_BASE = 12;
     const uint DRIVE_SERVO_PIN_BASE = 18;
     const uint DRIVE_LIGHT_PIN_BASE = 14;
+    const uint DRIVE_AUX_LIGHT_PIN_BASE = 16;
     const uint DRIVE_SERVO_POWER_PIN_BASE = 20;
 
     const uint PWM_FREQ = 320000;
@@ -34,6 +35,7 @@ int main()
     uint DRIVE_MOTOR_PWM_SLICE = pwm_gpio_to_slice_num(DRIVE_MOTOR_PIN_BASE);
     uint DRIVE_SERVO_PWM_SLICE = pwm_gpio_to_slice_num(DRIVE_SERVO_PIN_BASE);
     uint DRIVE_LIGHT_PWM_SLICE = pwm_gpio_to_slice_num(DRIVE_LIGHT_PIN_BASE);
+    uint DRIVE_AUX_LIGHT_PWM_SLICE = pwm_gpio_to_slice_num(DRIVE_AUX_LIGHT_PIN_BASE);
     uint DRIVE_SERVO_POWER_PWM_SLICE = pwm_gpio_to_slice_num(DRIVE_SERVO_POWER_PIN_BASE);
 
     const uint LIGHT_INTENSITY_OFF = 0;
@@ -47,6 +49,7 @@ int main()
     gpio_set_function(DRIVE_SERVO_PIN_BASE + 1, GPIO_FUNC_PWM);
     gpio_set_function(DRIVE_LIGHT_PIN_BASE, GPIO_FUNC_PWM);
     gpio_set_function(DRIVE_LIGHT_PIN_BASE + 1, GPIO_FUNC_PWM);
+    gpio_set_function(DRIVE_AUX_LIGHT_PIN_BASE, GPIO_FUNC_PWM);
     gpio_set_function(DRIVE_SERVO_POWER_PIN_BASE, GPIO_FUNC_PWM);
 
     // set clocks for PWM
@@ -54,24 +57,28 @@ int main()
     pwm_set_clkdiv(DRIVE_MOTOR_PWM_SLICE, PWM_CLK_DIV);
     pwm_set_clkdiv(DRIVE_SERVO_PWM_SLICE, PWM_CLK_DIV);
     pwm_set_clkdiv(DRIVE_LIGHT_PWM_SLICE, PWM_CLK_DIV);
+    pwm_set_clkdiv(DRIVE_AUX_LIGHT_PWM_SLICE, PWM_CLK_DIV);
     pwm_set_clkdiv(DRIVE_SERVO_POWER_PWM_SLICE, PWM_CLK_DIV);
 
     // set PWM counter wrap
     pwm_set_wrap(DRIVE_MOTOR_PWM_SLICE, 255);
     pwm_set_wrap(DRIVE_SERVO_PWM_SLICE, 255);
     pwm_set_wrap(DRIVE_LIGHT_PWM_SLICE, 255);
+    pwm_set_wrap(DRIVE_AUX_LIGHT_PWM_SLICE, 255);
     pwm_set_wrap(DRIVE_SERVO_POWER_PWM_SLICE, 255);
 
     // set all PWM to off
     pwm_set_both_levels(DRIVE_MOTOR_PWM_SLICE, 0, 0);
     pwm_set_both_levels(DRIVE_SERVO_PWM_SLICE, 0, 0);
     pwm_set_both_levels(DRIVE_LIGHT_PWM_SLICE, 0, 0);
+    pwm_set_chan_level(DRIVE_AUX_LIGHT_PWM_SLICE, PWM_CHAN_A, 0);
     pwm_set_chan_level(DRIVE_SERVO_POWER_PWM_SLICE, PWM_CHAN_A, 0);
 
     // enable pwm
     pwm_set_enabled(DRIVE_MOTOR_PWM_SLICE, true);
     pwm_set_enabled(DRIVE_SERVO_PWM_SLICE, true);
     pwm_set_enabled(DRIVE_LIGHT_PWM_SLICE, true);
+    pwm_set_enabled(DRIVE_AUX_LIGHT_PWM_SLICE, true);
     pwm_set_enabled(DRIVE_SERVO_POWER_PWM_SLICE, true);
 
     // initialize analog to digital converter
@@ -156,6 +163,7 @@ int main()
     uint cur_blink_iteration = 0;
     uint blink_iterations = blink_slow_delay / sleep_delay;
     light_state_t front_light_state = LIGHT_OFF;
+    light_state_t aux_light_state = LIGHT_OFF;
     gear_state_t gear_state = GEAR_F1;
 
     hid_state_t gpad_state;
@@ -175,6 +183,13 @@ int main()
             case LIGHT_OFF: front_light_state = LIGHT_LOW; break;
             case LIGHT_LOW: front_light_state = LIGHT_HIGH; break;
             default: front_light_state = LIGHT_OFF; break;
+            }
+        }
+        if (gpad_state.buttons & gpad_state.buttons_toggled & 0x8) {
+            switch (aux_light_state) {
+            case LIGHT_OFF: aux_light_state = LIGHT_LOW; break;
+            case LIGHT_LOW: aux_light_state = LIGHT_HIGH; break;
+            default: aux_light_state = LIGHT_OFF; break;
             }
         }
         switch (gpad_state.hat) {
@@ -311,7 +326,11 @@ int main()
             ((front_light_state == LIGHT_HIGH) ? LIGHT_INTENSITY_HIGH : LIGHT_INTENSITY_LOW) : LIGHT_INTENSITY_OFF;
         uint tail_light_intensity = (brake) ? LIGHT_INTENSITY_HIGH :
             ((front_light_state != LIGHT_OFF) ? LIGHT_INTENSITY_LOW : LIGHT_INTENSITY_OFF);
+        uint aux_light_intensity = (aux_light_state != LIGHT_OFF) ?
+            ((aux_light_state == LIGHT_HIGH) ? LIGHT_INTENSITY_HIGH : LIGHT_INTENSITY_LOW) : LIGHT_INTENSITY_OFF;
+
         pwm_set_both_levels(DRIVE_LIGHT_PWM_SLICE, front_light_intensity, tail_light_intensity);
+        pwm_set_chan_level(DRIVE_AUX_LIGHT_PWM_SLICE, PWM_CHAN_A, aux_light_intensity);
 
         cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, cur_blink_state);
         cur_blink_iteration++;
