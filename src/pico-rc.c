@@ -167,7 +167,7 @@ int main()
     gear_state_t gear_state = GEAR_F1;
 
     hid_state_t gpad_state;
-    uint max_servo_power_count = 0;
+    uint center_count = 0;
 #ifdef MOTOR_RAMP
     uint motor_count1 = 0;
     uint motor_count2 = 0;
@@ -206,7 +206,7 @@ int main()
         // Drive motors and leds
         if (use_servo_feedback) {
             const uint STEER_DEFAULT_TOLERANCE = 160;
-            const uint STEER_CENTER_TOLERANCE = 592;
+            const uint STEER_CENTER_TOLERANCE = 192;
             const uint STEER_SIDE_TOLERANCE = 96;
             uint steer_amount = (gpad_state.lx < 128) ?
                 ((servo_center_pos * gpad_state.lx) + (servo_left_pos * (128 - gpad_state.lx))) :
@@ -219,51 +219,52 @@ int main()
             uint steer_tolerance = STEER_DEFAULT_TOLERANCE;
             if (steer_amount_from_center < STEER_CENTER_TOLERANCE) {
                 steer_amount = servo_center_pos;
-                steer_tolerance = 0;
-            } else if (steer_amount_from_left < STEER_SIDE_TOLERANCE) {
-                steer_amount = servo_left_pos;
-                steer_tolerance = 0;
-            } else if (steer_amount_from_right < STEER_SIDE_TOLERANCE) {
-                steer_amount = servo_right_pos;
-                steer_tolerance = 0;
-            } else if (steer_amount_from_left < steer_amount_from_right) {
-                int steer_left_range = (servo_center_pos - STEER_CENTER_TOLERANCE) - (servo_left_pos - STEER_SIDE_TOLERANCE);
-                int steer_weight = (steer_amount - (servo_left_pos - STEER_SIDE_TOLERANCE));
-                steer_weight = (steer_weight * 4096) / steer_left_range;
-                steer_amount = (servo_center_pos * steer_weight) + (servo_left_pos * (4096 - steer_weight));
-                steer_amount >>= 12;
+                center_count++;
+                //steer_tolerance = 0;
             } else {
-                int steer_right_range = (servo_right_pos - STEER_SIDE_TOLERANCE) - (servo_center_pos + STEER_CENTER_TOLERANCE);
-                int steer_weight = (steer_amount - (servo_center_pos + STEER_CENTER_TOLERANCE));
-                steer_weight = (steer_weight * 4096) / steer_right_range;
-                steer_amount = (servo_right_pos * steer_weight) + (servo_center_pos * (4096 - steer_weight));
-                steer_amount >>= 12;
+                center_count = 0;
+                if (steer_amount_from_left < STEER_SIDE_TOLERANCE) {
+                    steer_amount = servo_left_pos;
+                    //steer_tolerance = 0;
+                } else if (steer_amount_from_right < STEER_SIDE_TOLERANCE) {
+                    steer_amount = servo_right_pos;
+                    //steer_tolerance = 0;
+                } else if (steer_amount_from_left < steer_amount_from_right) {
+                    int steer_left_range = (servo_center_pos - STEER_CENTER_TOLERANCE) - (servo_left_pos - STEER_SIDE_TOLERANCE);
+                    int steer_weight = (steer_amount - (servo_left_pos - STEER_SIDE_TOLERANCE));
+                    steer_weight = (steer_weight * 4096) / steer_left_range;
+                    steer_amount = (servo_center_pos * steer_weight) + (servo_left_pos * (4096 - steer_weight));
+                    steer_amount >>= 12;
+                } else {
+                    int steer_right_range = (servo_right_pos - STEER_SIDE_TOLERANCE) - (servo_center_pos + STEER_CENTER_TOLERANCE);
+                    int steer_weight = (steer_amount - (servo_center_pos + STEER_CENTER_TOLERANCE));
+                    steer_weight = (steer_weight * 4096) / steer_right_range;
+                    steer_amount = (servo_right_pos * steer_weight) + (servo_center_pos * (4096 - steer_weight));
+                    steer_amount >>= 12;
+                }
             }
             uint steer_diff = (steer_amount < cur_steer) ? cur_steer - steer_amount : steer_amount - cur_steer;
             const uint SERVO_MIN_POWER = 192;
             const uint SERVO_MAX_POWER = 256;
             uint servo_power = (((SERVO_MAX_POWER - SERVO_MIN_POWER) * steer_diff) >> 12) + SERVO_MIN_POWER;
-            if (steer_amount_from_center < STEER_CENTER_TOLERANCE ||
-                steer_amount_from_left < STEER_SIDE_TOLERANCE ||
+            if (steer_amount_from_left < STEER_SIDE_TOLERANCE ||
                 steer_amount_from_right < STEER_SIDE_TOLERANCE) {
                 servo_power = SERVO_MAX_POWER;
-            } else if (steer_diff < steer_tolerance) {
+            } else if (steer_amount_from_center < STEER_CENTER_TOLERANCE) {
+                servo_power = SERVO_MIN_POWER;
+            }
+            if (steer_diff < steer_tolerance) {
                 // if we're close enough to the correct steer postion, turn off the servo
                 servo_power = 0;
             }
             // set the direction correctly, and power on servo
-            if (steer_amount_from_center < STEER_CENTER_TOLERANCE && max_servo_power_count >= 10) {
+            if (steer_amount_from_center < STEER_CENTER_TOLERANCE && center_count >= 10) {
                 // center steering
                 pwm_set_both_levels(DRIVE_SERVO_PWM_SLICE, 0, 0);
             } else if (cur_steer < steer_amount || steer_amount_from_right < STEER_SIDE_TOLERANCE) {
                 pwm_set_both_levels(DRIVE_SERVO_PWM_SLICE, 256, 0);
             } else {
                 pwm_set_both_levels(DRIVE_SERVO_PWM_SLICE, 0, 256);
-            }
-            if (servo_power >= SERVO_MAX_POWER) {
-                max_servo_power_count++;
-            } else {
-                max_servo_power_count = 0;
             }
             pwm_set_chan_level(DRIVE_SERVO_POWER_PWM_SLICE, PWM_CHAN_A, servo_power);
         } else {
