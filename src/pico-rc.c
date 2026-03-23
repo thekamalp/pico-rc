@@ -24,6 +24,16 @@ int main()
         return -1;
     }
 
+    const uint SERVO_1PIN_ENABLE = 1;
+    const uint SERVO_1PIN_SCALE = 8;
+    const uint SERVO_1PIN_MIN_PULSE_US = 500;
+    const uint SERVO_1PIN_MAX_PULSE_US = 2500;
+    const uint SERVO_1PIN_FREQ_HZ = (SERVO_1PIN_SCALE * 256 * 1000000) / (SERVO_1PIN_MAX_PULSE_US - SERVO_1PIN_MIN_PULSE_US);
+    const uint SERVO_1PIN_MIN_PULSE_CLKS = SERVO_1PIN_MIN_PULSE_US * SERVO_1PIN_FREQ_HZ / 1000000;
+    const uint SERVO_1PIN_MAX_PULSE_CLKS = SERVO_1PIN_MAX_PULSE_US * SERVO_1PIN_FREQ_HZ / 1000000;
+    const uint SERVO_1PIN_PERIOD_US = 20000;
+    const uint SERVO_1PIN_PERIOD_CLKS = SERVO_1PIN_PERIOD_US * SERVO_1PIN_FREQ_HZ / 1000000;
+
     const uint DRIVE_MOTOR_PIN_BASE = 12;
     const uint DRIVE_SERVO_PIN_BASE = 18;
     const uint DRIVE_LIGHT_PIN_BASE = 14;
@@ -31,6 +41,8 @@ int main()
     const uint DRIVE_SERVO_POWER_PIN_BASE = 20;
 
     const uint PWM_FREQ = 320000;
+    const uint SERVO_PWM_FREQ = (SERVO_1PIN_ENABLE) ? SERVO_1PIN_FREQ_HZ : PWM_FREQ;
+    const uint SERVO_PWM_WRAP = (SERVO_1PIN_ENABLE) ? (SERVO_1PIN_PERIOD_CLKS - 1) : 255;
 
     uint DRIVE_MOTOR_PWM_SLICE = pwm_gpio_to_slice_num(DRIVE_MOTOR_PIN_BASE);
     uint DRIVE_SERVO_PWM_SLICE = pwm_gpio_to_slice_num(DRIVE_SERVO_PIN_BASE);
@@ -53,16 +65,18 @@ int main()
     gpio_set_function(DRIVE_SERVO_POWER_PIN_BASE, GPIO_FUNC_PWM);
 
     // set clocks for PWM
-    const float PWM_CLK_DIV = 125000000.0f / PWM_FREQ;
+    float SYSTEM_CLK = SYS_CLK_HZ;
+    float PWM_CLK_DIV = SYSTEM_CLK / PWM_FREQ;
+    float SERVO_PWM_CLK_DIV = SYSTEM_CLK / SERVO_PWM_FREQ;
     pwm_set_clkdiv(DRIVE_MOTOR_PWM_SLICE, PWM_CLK_DIV);
-    pwm_set_clkdiv(DRIVE_SERVO_PWM_SLICE, PWM_CLK_DIV);
+    pwm_set_clkdiv(DRIVE_SERVO_PWM_SLICE, SERVO_PWM_CLK_DIV);
     pwm_set_clkdiv(DRIVE_LIGHT_PWM_SLICE, PWM_CLK_DIV);
     pwm_set_clkdiv(DRIVE_AUX_LIGHT_PWM_SLICE, PWM_CLK_DIV);
     pwm_set_clkdiv(DRIVE_SERVO_POWER_PWM_SLICE, PWM_CLK_DIV);
 
     // set PWM counter wrap
     pwm_set_wrap(DRIVE_MOTOR_PWM_SLICE, 255);
-    pwm_set_wrap(DRIVE_SERVO_PWM_SLICE, 255);
+    pwm_set_wrap(DRIVE_SERVO_PWM_SLICE, SERVO_PWM_WRAP);
     pwm_set_wrap(DRIVE_LIGHT_PWM_SLICE, 255);
     pwm_set_wrap(DRIVE_AUX_LIGHT_PWM_SLICE, 255);
     pwm_set_wrap(DRIVE_SERVO_POWER_PWM_SLICE, 255);
@@ -89,58 +103,61 @@ int main()
     adc_gpio_init(ADC_PIN);
     adc_select_input(ADC_INPUT);
 
-    bool use_servo_feedback = true;
+    bool use_servo_feedback = (SERVO_1PIN_ENABLE == 0);
 
     // move the servo center, left and right, and check the servo feedback adc line
     // if thte line doesn't change (much), then assume no feedback is available, or not reliable
 
     const uint SERVO_CHECK_DELAY_MS = 600;
-    // power up servo, and should already be at center
-    // wait a small amount of time, and read the feedback
-    pwm_set_chan_level(DRIVE_SERVO_POWER_PWM_SLICE, PWM_CHAN_A, 256);
-    sleep_ms(SERVO_CHECK_DELAY_MS);
-    uint servo_center_pos = adc_read();
-
-    // move to left, wait, and read position
-    pwm_set_both_levels(DRIVE_SERVO_PWM_SLICE, 0, 256);
-    sleep_ms(SERVO_CHECK_DELAY_MS);
-    uint servo_left_pos = adc_read();
-
-    // Add a check to see if the input pin is disconnected
-    // enable the pull up resistor, and read the value, and store it
-    gpio_pull_up(ADC_PIN);
-    // wait to make sure pull up resistor has been enabled
-    sleep_ms(10);
-    // ADC value may have changed due to enabling the pull up resistor
-    uint pull_up_adc1 = adc_read();
-
-    // move to right, wait and read position
-    pwm_set_both_levels(DRIVE_SERVO_PWM_SLICE, 256, 0);
-    sleep_ms(SERVO_CHECK_DELAY_MS);
-
-    // Check if the value changed by a significant margin
-    uint pull_up_adc2 = adc_read();
-    uint pull_up_delta = (pull_up_adc1 > pull_up_adc2) ? pull_up_adc1 - pull_up_adc2 : pull_up_adc2 - pull_up_adc1;
-    const uint SERVO_FEEDBACK_EXISTS_TOLERANCE = 500;
-    use_servo_feedback = (pull_up_delta >= SERVO_FEEDBACK_EXISTS_TOLERANCE);
-    // disable pull up resistor
-    gpio_disable_pulls(ADC_PIN);
-    // wait to make sure resistor has been disabled
-    sleep_ms(10);
-
-    uint servo_right_pos = adc_read();
-
-    // move back to center, wait and power down
-    pwm_set_both_levels(DRIVE_SERVO_PWM_SLICE, 0, 0);
-    sleep_ms(SERVO_CHECK_DELAY_MS);
-
-    if ((servo_center_pos == servo_left_pos) || (servo_center_pos == servo_right_pos) || (servo_left_pos == servo_right_pos)) {
-        use_servo_feedback = false;
-    }
-    
+    uint servo_center_pos, servo_left_pos, servo_right_pos;
     if (use_servo_feedback) {
-        // if we're using feedback, power down the servo
-        pwm_set_chan_level(DRIVE_SERVO_POWER_PWM_SLICE, PWM_CHAN_A, 0);
+        // power up servo, and should already be at center
+        // wait a small amount of time, and read the feedback
+        pwm_set_chan_level(DRIVE_SERVO_POWER_PWM_SLICE, PWM_CHAN_A, 256);
+        sleep_ms(SERVO_CHECK_DELAY_MS);
+        servo_center_pos = adc_read();
+
+        // move to left, wait, and read position
+        pwm_set_both_levels(DRIVE_SERVO_PWM_SLICE, 0, 256);
+        sleep_ms(SERVO_CHECK_DELAY_MS);
+        servo_left_pos = adc_read();
+
+        // Add a check to see if the input pin is disconnected
+        // enable the pull up resistor, and read the value, and store it
+        gpio_pull_up(ADC_PIN);
+        // wait to make sure pull up resistor has been enabled
+        sleep_ms(10);
+        // ADC value may have changed due to enabling the pull up resistor
+        uint pull_up_adc1 = adc_read();
+
+        // move to right, wait and read position
+        pwm_set_both_levels(DRIVE_SERVO_PWM_SLICE, 256, 0);
+        sleep_ms(SERVO_CHECK_DELAY_MS);
+
+        // Check if the value changed by a significant margin
+        uint pull_up_adc2 = adc_read();
+        uint pull_up_delta = (pull_up_adc1 > pull_up_adc2) ? pull_up_adc1 - pull_up_adc2 : pull_up_adc2 - pull_up_adc1;
+        const uint SERVO_FEEDBACK_EXISTS_TOLERANCE = 500;
+        use_servo_feedback = (pull_up_delta >= SERVO_FEEDBACK_EXISTS_TOLERANCE);
+        // disable pull up resistor
+        gpio_disable_pulls(ADC_PIN);
+        // wait to make sure resistor has been disabled
+        sleep_ms(10);
+
+        servo_right_pos = adc_read();
+
+        // move back to center, wait and power down
+        pwm_set_both_levels(DRIVE_SERVO_PWM_SLICE, 0, 0);
+        sleep_ms(SERVO_CHECK_DELAY_MS);
+
+        if ((servo_center_pos == servo_left_pos) || (servo_center_pos == servo_right_pos) || (servo_left_pos == servo_right_pos)) {
+            use_servo_feedback = false;
+        }
+
+        if (use_servo_feedback) {
+            // if we're using feedback, power down the servo
+            pwm_set_chan_level(DRIVE_SERVO_POWER_PWM_SLICE, PWM_CHAN_A, 0);
+        }
     }
 
     const uint sleep_delay = 5;
@@ -204,7 +221,10 @@ int main()
         }
 
         // Drive motors and leds
-        if (use_servo_feedback) {
+        if (SERVO_1PIN_ENABLE) {
+            uint32_t steer_amount = SERVO_1PIN_MIN_PULSE_CLKS + SERVO_1PIN_SCALE * gpad_state.lx;
+            pwm_set_both_levels(DRIVE_SERVO_PWM_SLICE, steer_amount, 0);
+        } else if (use_servo_feedback) {
             const uint STEER_DEFAULT_TOLERANCE = 160;
             const uint STEER_CENTER_TOLERANCE = 192;
             const uint STEER_SIDE_TOLERANCE = 96;
