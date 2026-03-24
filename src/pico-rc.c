@@ -12,12 +12,6 @@ typedef enum {
     LIGHT_HIGH
 } light_state_t;
 
-typedef enum {
-    GEAR_R1 = -1,
-    GEAR_NEUTRAL = 0,
-    GEAR_F1 = 1
-} gear_state_t;
-
 int main()
 {
     if (btclient_setup()) {
@@ -33,6 +27,9 @@ int main()
     const uint SERVO_1PIN_MAX_PULSE_CLKS = SERVO_1PIN_MAX_PULSE_US * SERVO_1PIN_FREQ_HZ / 1000000;
     const uint SERVO_1PIN_PERIOD_US = 20000;
     const uint SERVO_1PIN_PERIOD_CLKS = SERVO_1PIN_PERIOD_US * SERVO_1PIN_FREQ_HZ / 1000000;
+
+    const int GEAR_MAX_FORWARD = 4;
+    const int GEAR_MAX_REVERSE = -1;
 
     const uint DRIVE_MOTOR_PIN_BASE = 12;
     const uint DRIVE_SERVO_PIN_BASE = 18;
@@ -181,7 +178,7 @@ int main()
     uint blink_iterations = blink_slow_delay / sleep_delay;
     light_state_t front_light_state = LIGHT_OFF;
     light_state_t aux_light_state = LIGHT_OFF;
-    gear_state_t gear_state = GEAR_F1;
+    int gear_state = 1;   // Start in 1st gear
 
     hid_state_t gpad_state;
     uint center_count = 0;
@@ -209,12 +206,26 @@ int main()
             default: aux_light_state = LIGHT_OFF; break;
             }
         }
+        if (gpad_state.buttons & gpad_state.buttons_toggled & 0x10) {
+            if (gear_state > 0) {
+                gear_state--;
+            } else if (gear_state < -1) {
+                gear_state++;
+            }
+        }
+        if (gpad_state.buttons & gpad_state.buttons_toggled & 0x20) {
+            if (gear_state >= 0 && gear_state < GEAR_MAX_FORWARD) {
+                gear_state++;
+            } else if (gear_state < 0 && gear_state > GEAR_MAX_REVERSE) {
+                gear_state--;
+            }
+        }
         switch (gpad_state.hat) {
         case 0:  // Up
-            gear_state = GEAR_F1;
+            gear_state = 1;
             break;
         case 4:  // Down
-            gear_state = GEAR_R1;
+            gear_state = -1;
             break;
         default:
             break;
@@ -223,7 +234,9 @@ int main()
         // Drive motors and leds
         if (SERVO_1PIN_ENABLE) {
             uint32_t steer_amount = SERVO_1PIN_MIN_PULSE_CLKS + SERVO_1PIN_SCALE * gpad_state.lx;
-            pwm_set_both_levels(DRIVE_SERVO_PWM_SLICE, steer_amount, 0);
+            uint32_t gear_amount = (gear_state < 0) ? -gear_state : gear_state;
+            gear_amount = SERVO_1PIN_MIN_PULSE_CLKS + SERVO_1PIN_SCALE * 64 * gear_amount;
+            pwm_set_both_levels(DRIVE_SERVO_PWM_SLICE, steer_amount, gear_amount);
         } else if (use_servo_feedback) {
             const uint STEER_DEFAULT_TOLERANCE = 160;
             const uint STEER_CENTER_TOLERANCE = 192;
@@ -337,7 +350,7 @@ int main()
         if (brake) {
             cur_motor_speed = 0;
             pwm_set_both_levels(DRIVE_MOTOR_PWM_SLICE, motor_speed, motor_speed);
-        } else if (gear_state == GEAR_R1) {
+        } else if (gear_state < 0) {
             pwm_set_both_levels(DRIVE_MOTOR_PWM_SLICE, 0, cur_motor_speed);
         } else {
             pwm_set_both_levels(DRIVE_MOTOR_PWM_SLICE, cur_motor_speed, 0);
