@@ -12,6 +12,12 @@ typedef enum {
     LIGHT_HIGH
 } light_state_t;
 
+uint speed_sensor_count = 0;
+void speed_sensor_irq(uint gpio, uint32_t events)
+{
+    speed_sensor_count++;
+}
+
 int main()
 {
     if (btclient_setup()) {
@@ -31,11 +37,12 @@ int main()
     const int GEAR_MAX_FORWARD = 4;
     const int GEAR_MAX_REVERSE = -1;
 
-    const uint DRIVE_MOTOR_PIN_BASE = 12;
+    const uint DRIVE_MOTOR_PIN_BASE = 10;
     const uint DRIVE_SERVO_PIN_BASE = 18;
-    const uint DRIVE_LIGHT_PIN_BASE = 14;
-    const uint DRIVE_AUX_LIGHT_PIN_BASE = 16;
+    const uint DRIVE_LIGHT_PIN_BASE = 16;
+    const uint DRIVE_AUX_LIGHT_PIN_BASE = 14;
     const uint DRIVE_SERVO_POWER_PIN_BASE = 20;
+    const uint SPEED_SENSOR_INPUT_PIN = 22;
 
     const uint PWM_FREQ = 320000;
     const uint SERVO_PWM_FREQ = (SERVO_1PIN_ENABLE) ? SERVO_1PIN_FREQ_HZ : PWM_FREQ;
@@ -102,6 +109,23 @@ int main()
 
     bool use_servo_feedback = (SERVO_1PIN_ENABLE == 0);
 
+    // Initialize and enable interrupt triggered when the speed sensor hits a rising edge
+    bool speed_sensor_connected;
+    gpio_init(SPEED_SENSOR_INPUT_PIN);
+    gpio_set_dir(SPEED_SENSOR_INPUT_PIN, GPIO_IN);
+    gpio_pull_down(SPEED_SENSOR_INPUT_PIN);
+    sleep_ms(10);
+    speed_sensor_connected = (gpio_get(SPEED_SENSOR_INPUT_PIN) != 0);
+    gpio_pull_up(SPEED_SENSOR_INPUT_PIN);
+    sleep_ms(10);
+    speed_sensor_connected = speed_sensor_connected || (gpio_get(SPEED_SENSOR_INPUT_PIN) == 0);
+
+    if (speed_sensor_connected) {
+        gpio_set_irq_enabled_with_callback(SPEED_SENSOR_INPUT_PIN, GPIO_IRQ_EDGE_RISE, true, speed_sensor_irq);
+    }
+
+    bool automatic_transmission = speed_sensor_connected;
+
     // move the servo center, left and right, and check the servo feedback adc line
     // if thte line doesn't change (much), then assume no feedback is available, or not reliable
 
@@ -157,10 +181,21 @@ int main()
         }
     }
 
-    const uint sleep_delay = 5;
-    const uint blink_slow_delay = 500;
-    const uint blink_med_delay = 250;
-    const uint blink_fast_delay = 50;
+    const uint SLEEP_PERIOD_MS = 5;
+    const uint BLINK_SLOW_PERIOD_MS = 500;
+    const uint BLINK_MED_PERIOD_MS = 250;
+    const uint BLINK_FAST_PERIOD_MS = 50;
+
+    const uint BLINK_SLOW_ITERATIONS = BLINK_SLOW_PERIOD_MS / SLEEP_PERIOD_MS;
+    const uint BLINK_MED_ITERATIONS = BLINK_MED_PERIOD_MS / SLEEP_PERIOD_MS;
+    const uint BLINK_FAST_ITERATIONS = BLINK_FAST_PERIOD_MS / SLEEP_PERIOD_MS;
+
+    const uint SPEED_UPDATE_PERIOD_MS = 250;
+    const uint SPEED_UPDATE_ITERATIONS = SPEED_UPDATE_PERIOD_MS / SLEEP_PERIOD_MS;
+    const uint SPEED_UPDATE_HISTORY_LOG2 = 2;
+    const uint SPEED_UPDATE_HISTORY = (1 << SPEED_UPDATE_HISTORY_LOG2);
+
+    const uint MAX_GEAR_SPEED[] = { 2, 6, 9 };
 
 #ifdef MOTOR_RAMP
     const uint motor_ramp_ms = 2000;  // Time in ms to ramp the motor to full throttle
@@ -175,10 +210,19 @@ int main()
 
     uint cur_blink_state = 0;
     uint cur_blink_iteration = 0;
-    uint blink_iterations = blink_slow_delay / sleep_delay;
+    uint blink_iterations = BLINK_SLOW_ITERATIONS;
     light_state_t front_light_state = LIGHT_OFF;
     light_state_t aux_light_state = LIGHT_OFF;
     int gear_state = 1;   // Start in 1st gear
+    int max_gear_state = (automatic_transmission) ? GEAR_MAX_FORWARD : 1;
+    uint cur_speed_update_iteration = 0;
+    uint speed_history[SPEED_UPDATE_HISTORY];
+    uint speed_history_entry = 0;
+    uint cur_speed = 0;
+    uint i;
+    for (i = 0; i < SPEED_UPDATE_HISTORY; i++) {
+        speed_history[i] = 0;
+    }
 
     hid_state_t gpad_state;
     uint center_count = 0;
@@ -206,35 +250,65 @@ int main()
             default: aux_light_state = LIGHT_OFF; break;
             }
         }
+        if (gpad_state.buttons & gpad_state.buttons_toggled & 0x4) {
+            if (speed_sensor_connected) {
+                automatic_transmission = !automatic_transmission;
+                if (automatic_transmission) {
+                    max_gear_state = GEAR_MAX_FORWARD;
+                } else {
+                    max_gear_state = gear_state;
+                }
+            }
+        }
         if (gpad_state.buttons & gpad_state.buttons_toggled & 0x10) {
-            if (gear_state > 0) {
-                gear_state--;
-            } else if (gear_state < -1) {
-                gear_state++;
+            if (max_gear_state > 1) {
+                max_gear_state--;
+            } else if (max_gear_state < -1) {
+                max_gear_state++;
             }
         }
         if (gpad_state.buttons & gpad_state.buttons_toggled & 0x20) {
-            if (gear_state >= 0 && gear_state < GEAR_MAX_FORWARD) {
-                gear_state++;
-            } else if (gear_state < 0 && gear_state > GEAR_MAX_REVERSE) {
-                gear_state--;
+            if (max_gear_state >= 0 && max_gear_state < GEAR_MAX_FORWARD) {
+                max_gear_state++;
+            } else if (max_gear_state < 0 && max_gear_state > GEAR_MAX_REVERSE) {
+                max_gear_state--;
             }
         }
-        switch (gpad_state.hat) {
-        case 0:  // Up
-            gear_state = 1;
-            break;
-        case 4:  // Down
-            gear_state = -1;
-            break;
-        default:
-            break;
+        if (cur_speed == 0) {
+            switch (gpad_state.hat) {
+            case 0:  // Up
+                gear_state = 1;
+                break;
+            case 4:  // Down
+                gear_state = -1;
+                break;
+            default:
+                break;
+            }
+        }
+        if (automatic_transmission) {
+            if (gear_state > 0 && gear_state < GEAR_MAX_FORWARD) {
+                if (cur_speed > MAX_GEAR_SPEED[gear_state - 1]) {
+                    gear_state++;
+                }
+            }
+            if (gear_state > 1 && gear_state <= GEAR_MAX_FORWARD) {
+                if (cur_speed < MAX_GEAR_SPEED[gear_state - 2]) {
+                    gear_state--;
+                }
+            }
+            if (gear_state > max_gear_state) {
+                gear_state = max_gear_state;
+            }
+        } else {
+            gear_state = max_gear_state;
         }
 
         // Drive motors and leds
         if (SERVO_1PIN_ENABLE) {
-            uint32_t steer_amount = SERVO_1PIN_MIN_PULSE_CLKS + SERVO_1PIN_SCALE * gpad_state.lx;
+            uint32_t steer_amount = SERVO_1PIN_MIN_PULSE_CLKS + SERVO_1PIN_SCALE * (255 - gpad_state.lx);
             uint32_t gear_amount = (gear_state < 0) ? -gear_state : gear_state;
+            //gear_amount = 4 - gear_amount;
             gear_amount = SERVO_1PIN_MIN_PULSE_CLKS + SERVO_1PIN_SCALE * 64 * gear_amount;
             pwm_set_both_levels(DRIVE_SERVO_PWM_SLICE, steer_amount, gear_amount);
         } else if (use_servo_feedback) {
@@ -370,14 +444,27 @@ int main()
         cur_blink_iteration++;
         if (cur_blink_iteration >= blink_iterations) {
             cur_blink_state = !cur_blink_state;
-            cur_blink_iteration = 0;
+            cur_blink_iteration -= blink_iterations;
             switch (blink_state) {
-            case BLINK_SLOW: blink_iterations = blink_slow_delay; break;
-            case BLINK_MED:  blink_iterations = blink_med_delay; break;
-            case BLINK_FAST: blink_iterations = blink_fast_delay; break;
+            case BLINK_SLOW: blink_iterations = BLINK_SLOW_ITERATIONS; break;
+            case BLINK_MED:  blink_iterations = BLINK_MED_ITERATIONS; break;
+            case BLINK_FAST: blink_iterations = BLINK_FAST_ITERATIONS; break;
             }
-            blink_iterations /= sleep_delay;
         }
-        sleep_ms(sleep_delay);
+        cur_speed_update_iteration++;
+        if (cur_speed_update_iteration >= SPEED_UPDATE_ITERATIONS) {
+            cur_speed_update_iteration -= SPEED_UPDATE_ITERATIONS;
+            cur_speed -= speed_history[speed_history_entry];
+            uint32_t irq_status = save_and_disable_interrupts();
+            speed_history[speed_history_entry] = speed_sensor_count;
+            speed_sensor_count = 0;
+            restore_interrupts(irq_status);
+            cur_speed += speed_history[speed_history_entry];
+            speed_history_entry++;
+            if (speed_history_entry >= SPEED_UPDATE_HISTORY) {
+                speed_history_entry = 0;
+            }
+        }
+        sleep_ms(SLEEP_PERIOD_MS);
     }
 }
